@@ -20,7 +20,6 @@ def parse_log_maven(log: str, test_spec: TestSpec) -> dict[str, str]:
     """
     test_status_map = {}
     pending_tests: list[str] = []
-    unmatched_results: list[str] = []
 
     # Get the test name from the command used to execute the test.
     # Assumes we run evaluation with set -x
@@ -41,26 +40,10 @@ def parse_log_maven(log: str, test_spec: TestSpec) -> dict[str, str]:
                     test_status_map[test_name] = TestStatus.PASSED.value
                 elif status == "FAILURE":
                     test_status_map[test_name] = TestStatus.FAILED.value
-            else:
-                # Track unmatched results for later matching
-                unmatched_results.append(status)
 
-    # Match any remaining pending tests with unmatched results (FIFO order)
-    # This handles cases where BUILD results appear after other output
-    while pending_tests and unmatched_results:
-        test_name = pending_tests.pop(0)
-        status = unmatched_results.pop(0)
-        if status == "SUCCESS":
-            test_status_map[test_name] = TestStatus.PASSED.value
-        elif status == "FAILURE":
-            test_status_map[test_name] = TestStatus.FAILED.value
-
-    # Warn if there are still pending tests without results
-    if pending_tests:
-        print(
-            f"[WARNING] Maven log parser: {len(pending_tests)} test(s) had no BUILD result: "
-            f"{pending_tests}"
-        )
+    # Any pending tests without a BUILD result are marked as failed
+    for test_name in pending_tests:
+        test_status_map[test_name] = TestStatus.FAILED.value
 
     return test_status_map
 
@@ -94,18 +77,17 @@ def parse_log_gradle_custom(log: str, test_spec: TestSpec) -> dict[str, str]:
 
     # Pattern for normal case: test name and status on the same line
     # e.g., "com.example.Test > testMethod PASSED"
-    # [^>] ensures we don't match lines starting with > (shell prompts, etc.)
-    full_pattern = r"^([^>].+)\s+(PASSED|FAILED)"
+    # Requires " > " to avoid matching non-test lines like "BUILD FAILED"
+    full_pattern = r"^(.+\s+>\s+\S+)\s+(PASSED|FAILED)"
 
     # Pattern for test name without status (race condition case)
     # e.g., "com.example.Test > testMethod" followed by warnings, then "PASSED"
-    # Must also start with [^>] for consistency
-    test_name_pattern = r"^([^>]\S*\s+>\s+\S+)$"
+    test_name_pattern = r"^(\S+\s+>\s+\S+)$"
 
     # Pattern for standalone status line
     status_only_pattern = r"^(PASSED|FAILED)$"
 
-    pending_test_name = None
+    pending_tests: list[str] = []
 
     for line in log.split("\n"):
         stripped = line.strip()
@@ -118,31 +100,28 @@ def parse_log_gradle_custom(log: str, test_spec: TestSpec) -> dict[str, str]:
                 test_status_map[test_name] = TestStatus.PASSED.value
             elif status == "FAILED":
                 test_status_map[test_name] = TestStatus.FAILED.value
-            pending_test_name = None
             continue
 
         # Check for test name without status
         test_name_match = re.match(test_name_pattern, stripped)
         if test_name_match:
-            pending_test_name = test_name_match.group(1)
+            pending_tests.append(test_name_match.group(1))
             continue
 
-        # Check for standalone status (applies to pending test name)
-        if pending_test_name:
+        # Check for standalone status (applies to oldest pending test)
+        if pending_tests:
             status_match = re.match(status_only_pattern, stripped)
             if status_match:
                 status = status_match.group(1)
+                test_name = pending_tests.pop(0)
                 if status == "PASSED":
-                    test_status_map[pending_test_name] = TestStatus.PASSED.value
+                    test_status_map[test_name] = TestStatus.PASSED.value
                 elif status == "FAILED":
-                    test_status_map[pending_test_name] = TestStatus.FAILED.value
-                pending_test_name = None
+                    test_status_map[test_name] = TestStatus.FAILED.value
 
-    # Warn if there's a pending test without a result
-    if pending_test_name:
-        print(
-            f"[WARNING] Gradle log parser: test had no status result: {pending_test_name}"
-        )
+    # Any pending tests without a status result are marked as failed
+    for test_name in pending_tests:
+        test_status_map[test_name] = TestStatus.FAILED.value
 
     return test_status_map
 

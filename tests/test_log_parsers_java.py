@@ -43,6 +43,49 @@ FAILED
         assert result["com.example.Test > testTwo"] == TestStatus.PASSED.value
         assert result["com.example.Test > testThree"] == TestStatus.FAILED.value
 
+    def test_trailing_text_after_status(self):
+        """Test that status followed by trailing text (no space) still matches."""
+        log = """com.example.Test > testOne PASSEDWARNING: A command line option has changed
+com.example.Test > testTwo FAILED some extra text
+"""
+        result = parse_log_gradle_custom(log, test_spec=None)
+
+        assert result["com.example.Test > testOne"] == TestStatus.PASSED.value
+        assert result["com.example.Test > testTwo"] == TestStatus.FAILED.value
+
+    def test_multi_pending_interleaving(self):
+        """Test multiple test headers before their standalone status lines."""
+        log = """com.example.Test > testOne
+com.example.Test > testTwo
+PASSED
+FAILED
+"""
+        result = parse_log_gradle_custom(log, test_spec=None)
+
+        assert len(result) == 2
+        assert result["com.example.Test > testOne"] == TestStatus.PASSED.value
+        assert result["com.example.Test > testTwo"] == TestStatus.FAILED.value
+
+    def test_build_failed_not_matched_as_test(self):
+        """Test that BUILD FAILED is not matched as a test result."""
+        log = """com.example.Test > testOne PASSED
+BUILD FAILED
+"""
+        result = parse_log_gradle_custom(log, test_spec=None)
+
+        assert len(result) == 1
+        assert result["com.example.Test > testOne"] == TestStatus.PASSED.value
+
+    def test_pending_without_result_marked_failed(self):
+        """Test that a test header with no status result is marked as failed."""
+        log = """com.example.Test > testOne PASSED
+com.example.Test > testTwo
+"""
+        result = parse_log_gradle_custom(log, test_spec=None)
+
+        assert result["com.example.Test > testOne"] == TestStatus.PASSED.value
+        assert result["com.example.Test > testTwo"] == TestStatus.FAILED.value
+
 
 class TestParseLogMaven:
     """Tests for parse_log_maven used by Gson, Druid, JavaParser."""
@@ -76,17 +119,25 @@ class TestParseLogMaven:
         assert result["com.example.Test#testTwo"] == TestStatus.PASSED.value
         assert result["com.example.Test#testThree"] == TestStatus.FAILED.value
 
-    def test_delayed_build_result_after_marker(self):
-        """Test when BUILD SUCCESS appears after end marker due to buffering."""
+    def test_pending_without_result_marked_failed(self):
+        """Test that a test command with no BUILD result is marked as failed."""
         log = """+ mvnd test -B -Dtest=com.example.Test#testOne
 [INFO] BUILD SUCCESS
 + mvnd test -B -Dtest=com.example.Test#testTwo
-+ : '>>>>> End Test Output'
-+ git checkout somefile.java
-[INFO] BUILD SUCCESS
 """
         result = parse_log_maven(log, test_spec=None)
 
         assert len(result) == 2
         assert result["com.example.Test#testOne"] == TestStatus.PASSED.value
-        assert result["com.example.Test#testTwo"] == TestStatus.PASSED.value
+        assert result["com.example.Test#testTwo"] == TestStatus.FAILED.value
+
+    def test_stray_build_result_ignored(self):
+        """Test that BUILD results before any test command are ignored."""
+        log = """[INFO] BUILD SUCCESS
++ mvnd test -B -Dtest=com.example.Test#testOne
+[INFO] BUILD FAILURE
+"""
+        result = parse_log_maven(log, test_spec=None)
+
+        assert len(result) == 1
+        assert result["com.example.Test#testOne"] == TestStatus.FAILED.value
