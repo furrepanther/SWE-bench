@@ -1,7 +1,7 @@
 {
   "codeguard_source_repo": "https://github.com/cosai-oasis/project-codeguard",
   "codeguard_source_ref": "a86feef6c9433a3669f1c290c29e5857f7374f39",
-  "generated_at_utc": "2026-03-28T10:36:01Z",
+  "generated_at_utc": "2026-04-02T10:37:25Z",
   "sources_included": ["core", "owasp"],
   "installed_formats": [
     ".agent/rules",
